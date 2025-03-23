@@ -1,0 +1,151 @@
+import os, sys, hashlib, ssl, certifi
+from torch.hub import download_url_to_file
+from loguru import logger
+from urllib.request import urlopen, Request
+from tqdm import tqdm
+
+# Get the directory of the current file
+current_file_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Navigate up two levels to reach the project root
+project_root = os.path.dirname(os.path.dirname(current_file_dir))
+
+# Define the base directory for all models
+models_base_dir = os.path.join(project_root, 'models')
+
+def calculate_sha256_checksum(file_path):
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        # Read and update hash in chunks of 4K
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
+
+def get_models(data):
+    # Check if the save directory exists; if not, create it
+    save_dir = data['save_dir']
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+        print(f"Created directory: {save_dir}")
+
+    # Create an SSL context using certifi
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+    for i, file_name in enumerate(data['files']):
+        file_url = f"{data['url']}{file_name}"
+        file_path = os.path.join(data['save_dir'], file_name)
+        expected_checksum = data['sha256_pre_calculated'][i]
+
+        # Check if the file already exists
+        if os.path.exists(file_path):
+            # If there's an expected checksum, verify it
+            if expected_checksum is not None:
+                calculated_checksum = calculate_sha256_checksum(file_path)
+                if calculated_checksum == expected_checksum:
+                    continue
+                else:
+                    print(f"Checksum mismatch for {file_name}. Expected {expected_checksum}, got {calculated_checksum}. Redownloading...")
+
+        sys.stderr.write(f'Downloading: "{file_url}" to {save_dir}\n')
+        download_file_with_ssl(file_url, file_path, ssl_context)
+
+        if expected_checksum:
+            calculated_checksum = calculate_sha256_checksum(file_path)
+            if calculated_checksum == expected_checksum:
+                logger.info(f"Download model success, sha256: {calculated_checksum}")
+            else:
+                try:
+                    os.remove(file_path)
+                    logger.error(
+                        f"Model sha256: {calculated_checksum}, expected sha256: {expected_checksum}, wrong model deleted. Please restart comic-translate."
+                    )
+                except:
+                    logger.error(
+                        f"Model sha256: {calculated_checksum}, expected sha256: {expected_checksum}, please delete {file_path} and restart comic-translate."
+                    )
+                exit(-1)
+
+def download_file_with_ssl(url, file_path, ssl_context):
+    req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    
+    with urlopen(req, context=ssl_context) as u, open(file_path, 'wb') as f:
+        file_size = int(u.headers['Content-Length'])
+        chunk_size = 8192
+        
+        with tqdm(total=file_size, unit='B', unit_scale=True, desc=file_path, ascii=True) as pbar:
+            while True:
+                buffer = u.read(chunk_size)
+                if not buffer:
+                    break
+
+                f.write(buffer)
+                pbar.update(len(buffer))
+
+# Default Models
+manga_ocr_data = {
+    'url': 'https://huggingface.co/kha-white/manga-ocr-base/resolve/main/',
+    'files': [
+        'pytorch_model.bin', 'config.json', 'preprocessor_config.json',
+        'README.md', 'special_tokens_map.json', 'tokenizer_config.json', 'vocab.txt'
+    ],
+    'sha256_pre_calculated': [
+        'c63e0bb5b3ff798c5991de18a8e0956c7ee6d1563aca6729029815eda6f5c2eb', 
+        '8c0e395de8fa699daaac21aee33a4ba9bd1309cfbff03147813d2a025f39f349', 
+        'af4eb4d79cf61b47010fc0bc9352ee967579c417423b4917188d809b7e048948', 
+        '32f413afcc4295151e77d25202c5c5d81ef621b46f947da1c3bde13256dc0d5f', 
+        '303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3', 
+        'd775ad1deac162dc56b84e9b8638f95ed8a1f263d0f56f4f40834e26e205e266', 
+        '344fbb6b8bf18c57839e924e2c9365434697e0227fac00b88bb4899b78aa594d'
+    ],
+    'save_dir': os.path.join(models_base_dir, 'ocr', 'manga-ocr-base')
+}
+
+comic_text_segmenter_data = {
+    'url': 'https://huggingface.co/ogkalu/comic-text-segmenter-yolov8m/resolve/main/',
+    'files': ['comic-text-segmenter.pt'],
+    'sha256_pre_calculated': [
+        'f2dded0d2f5aaa25eed49f1c34a4720f1c1cd40da8bc3138fde1abb202de625e', 
+    ],
+    'save_dir': os.path.join(models_base_dir, 'detection')
+}
+
+inpaint_lama_finetuned_data = {
+    'url': 'https://huggingface.co/dreMaz/AnimeMangaInpainting/resolve/main/',
+    'files': ['lama_large_512px.ckpt'],
+    'sha256_pre_calculated': [
+        "11d30fbb3000fb2eceae318b75d9ced9229d99ae990a7f8b3ac35c8d31f2c935"
+    ],
+    'save_dir': os.path.join(models_base_dir, 'inpainting')
+}
+
+comic_bubble_detector_data = {
+    'url': 'https://huggingface.co/ogkalu/comic-speech-bubble-detector-yolov8m/resolve/main/',
+    'files': ['comic-speech-bubble-detector.pt'],
+    'sha256_pre_calculated': [
+        '10bc9f702698148e079fb4462a6b910fcd69753e04838b54087ef91d5633097b'
+    ],
+    'save_dir': os.path.join(models_base_dir, 'detection')
+}
+
+pororo_data = {
+    'url': 'https://twg.kakaocdn.net/pororo/ko/models/misc/',
+    'files': ['craft.pt', 'brainocr.pt', 'ocr-opt.txt'],
+    'sha256_pre_calculated': [
+        '4a5efbfb48b4081100544e75e1e2b57f8de3d84f213004b14b85fd4b3748db17',
+        '125820ba8ae4fa5d9fd8b8a2d4d4a7afe96a70c32b1aa01d4129001a6f61baec',
+        'dd471474e91d78e54b179333439fea58158ad1a605df010ea0936dcf4387a8c2'
+    ],
+    'save_dir': os.path.join(models_base_dir, 'ocr', 'pororo')
+}
+
+manga_text_detector_data = {
+    'url': 'https://huggingface.co/ogkalu/manga-text-detector-yolov8s/resolve/main/',
+    'files': ['manga-text-detector.pt'],
+    'sha256_pre_calculated': [
+        '297447cc99c47f15ffced11bebebd88034e56f0fac6c96d9a27cd725314909a1'
+    ],
+    'save_dir': os.path.join(models_base_dir, 'detection')
+}
+
+mandatory_models = [comic_text_segmenter_data, inpaint_lama_finetuned_data,
+                    comic_bubble_detector_data, manga_text_detector_data]
